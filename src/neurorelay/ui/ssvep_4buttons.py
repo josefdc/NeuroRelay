@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 from PySide6.QtCore import Qt, QElapsedTimer, QTimer, QRectF, QSize
-from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPaintEvent
+from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPaintEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -46,6 +46,22 @@ class UiConfig:
         )
 
 
+def apply_dark_theme(app) -> None:
+    """Minimal dark Fusion palette; grayscale-only for stimuli, subtle accent for HUD."""
+    app.setStyle("Fusion")
+    pal = app.palette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(18, 18, 18))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(230, 230, 230))
+    pal.setColor(QPalette.ColorRole.Base, QColor(24, 24, 24))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(30, 30, 30))
+    pal.setColor(QPalette.ColorRole.Text, QColor(230, 230, 230))
+    pal.setColor(QPalette.ColorRole.Button, QColor(30, 30, 30))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor(235, 235, 235))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(53, 132, 228))   # subtle accent (HUD only)
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    app.setPalette(pal)
+
+
 def luminance_sinusoidal(t_sec: float, f_hz: float) -> float:
     return 0.5 + 0.5 * math.sin(2.0 * math.pi * f_hz * t_sec)
 
@@ -73,16 +89,26 @@ class FlickerTile(QWidget):
         self.intensity = float(intensity)
         self.elapsed = QElapsedTimer()
         self.elapsed.start()
+        
+        # Optional: a lightweight timer that repaints just this tile.
+        # Comment this in if you still don't see flicker with the window timer.
+        # from PySide6.QtCore import QTimer, Qt
+        # self._paint_timer = QTimer(self)
+        # self._paint_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        # self._paint_timer.timeout.connect(self.update)
+        # self._paint_timer.start(16)  # ~60 FPS; adjust if needed
 
         self.confidence: float = 0.0
         self.dwell: float = 0.0
         self.is_winner: bool = False
 
-        self._font = QFont("Arial", 20, QFont.Weight.DemiBold)
-        self._pen_border = QPen(QColor(30, 30, 30), 2.0)
-        self._pen_ring = QPen(QColor(0, 0, 0), 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        self._pen_ring_high = QPen(QColor(0, 0, 0), 10.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        self._font = QFont("Arial", 24, QFont.Weight.DemiBold)
+        self._pen_border = QPen(QColor(40, 40, 40), 2.0)
+        # Elegant rings: thin for non-winner, slightly thicker for winner
+        self._pen_ring = QPen(QColor(0, 0, 0), 4.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        self._pen_ring_high = QPen(QColor(0, 0, 0), 7.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         self._text_color = QColor(0, 0, 0)
+        self._corner_radius = 16
 
     def minimumSizeHint(self) -> QSize:
         return QSize(260, 160)
@@ -116,29 +142,45 @@ class FlickerTile(QWidget):
         value = max(0, min(255, int(lum * 255)))
         bg = QColor(value, value, value)
 
-        p.fillRect(self.rect(), bg)
+        # Rounded tile background
+        r = self.rect().adjusted(1, 1, -1, -1)
+        rr = self._corner_radius
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(bg)
+        p.drawRoundedRect(r, rr, rr)
 
+        # Minimal border
         p.setPen(self._pen_border)
-        p.drawRect(self.rect().adjusted(1, 1, -2, -2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(r, rr, rr)
 
         p.setFont(self._font)
         p.setPen(self._text_color if value > 128 else QColor(255, 255, 255))
-        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.label)
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.label)
 
-        bar_h = max(6, int(self.height() * 0.04))
+        # Confidence underline: hairline under text, subtle and minimal
+        underline_th = max(2, int(self.height() * 0.012))
         bar_w = int(self.width() * self.confidence)
-        bar_rect = QRectF(0, self.height() - bar_h, bar_w, bar_h)
-        p.fillRect(bar_rect, QColor(0, 0, 0, 180))
+        bar_rect = QRectF(r.x(), r.bottom() - underline_th, bar_w, underline_th)
+        p.fillRect(bar_rect, QColor(0, 0, 0, 160) if value > 128 else QColor(255, 255, 255, 200))
 
         if self.dwell > 0.0:
             pad = 6
-            arc_rect = self.rect().adjusted(pad, pad, -pad, -pad)
+            arc_rect = r.adjusted(pad, pad, -pad, -pad)
             p.setPen(self._pen_ring_high if self.is_winner else self._pen_ring)
             start_angle = 90 * 16
             span_angle = -int(self.dwell * 360 * 16)
             p.drawArc(arc_rect, start_angle, span_angle)
 
         p.end()
+
+    def resizeEvent(self, e):
+        # Scale label responsively to tile height (capped)
+        h = max(1, self.height())
+        pt = max(18.0, min(48.0, h * 0.14))
+        if abs(self._font.pointSizeF() - pt) > 0.5:
+            self._font.setPointSizeF(pt)
+        super().resizeEvent(e)
 
 
 class NeuroRelayWindow(QMainWindow):
@@ -200,6 +242,11 @@ class NeuroRelayWindow(QMainWindow):
         v.addWidget(self.map_label)
         v.addWidget(self.cfg_label)
         self.setCentralWidget(root)
+        
+        # Minimal by default (HUD hidden)
+        self._hud_visible = False
+        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause, self.intensity_slider):
+            w.setVisible(self._hud_visible)
 
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -242,6 +289,10 @@ class NeuroRelayWindow(QMainWindow):
                 self._on_pause()
             elif key == Qt.Key.Key_Escape:
                 self.close()
+            elif key == Qt.Key.Key_H:
+                self._toggle_hud()
+            elif key in (Qt.Key.Key_F11,):
+                self._toggle_fullscreen()
         return super().eventFilter(obj, event)
 
     def _set_winner(self, idx: int) -> None:
@@ -263,12 +314,30 @@ class NeuroRelayWindow(QMainWindow):
         self.is_paused = not self.is_paused
         self.btn_pause.setText("Resume" if self.is_paused else "Pause")
 
+    def _toggle_hud(self) -> None:
+        self._hud_visible = not self._hud_visible
+        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause, self.intensity_slider):
+            w.setVisible(self._hud_visible)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
     def _on_tick(self) -> None:
-        if not self.is_paused:
-            self.update()
+        # Update simulated feedback (Phase 1)
         idx, conf, dwell = self._simulate_feedback()
-        for i, t in enumerate(self.tiles):
-            t.set_feedback(conf if i == idx else max(0.0, conf - 0.3), dwell if i == idx else 0.0, i == idx)
+
+        # Push feedback & trigger repaint on each tile
+        for i, tile in enumerate(self.tiles):
+            tile.set_feedback(
+                conf if i == idx else max(0.0, conf - 0.3),
+                dwell if i == idx else 0.0,
+                i == idx,
+            )
+            if not self.is_paused:
+                tile.update()
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -278,6 +347,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--config", default="config/default.json", help="Path to config JSON")
     parser.add_argument("--mode", choices=["sinusoidal", "square"], default="sinusoidal", help="Flicker mode")
     parser.add_argument("--auto-freqs", action="store_true", help="Use monitor_hz/[7,6,5,4] instead of config freqs")
+    parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen")
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -296,11 +366,12 @@ def main(argv: List[str] | None = None) -> int:
         print(f"Auto frequencies for {mhz:.2f} Hz: {cfg.freqs_hz}")
 
     app = QApplication([])
+    apply_dark_theme(app)
     win = NeuroRelayWindow(cfg, config_path=config_path)
     for t in win.tiles:
         t.mode = cfg.flicker_mode
-    win.resize(960, 720)
-    win.show()
+    win.resize(1120, 760)
+    win.showFullScreen() if args.fullscreen else win.show()
     return app.exec()
 
 
