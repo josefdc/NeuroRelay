@@ -210,6 +210,7 @@ class NeuroRelayWindow(QMainWindow):
         grid_wrap = QWidget()
         grid_wrap.setLayout(grid)
         self._grid = grid
+        self._grid_wrap = grid_wrap
 
         self.mode_label = QLabel(f"Mode: {self.state.upper()}")
         self.mode_label.setStyleSheet("font-weight:600;")
@@ -302,6 +303,29 @@ class NeuroRelayWindow(QMainWindow):
         # Apply initial gutters around/within the grid
         self._apply_gutters()
 
+        # ---- Center prompt (overlay) ----
+        self.center_prompt = QFrame(self._grid_wrap)
+        self.center_prompt.setObjectName("centerPrompt")
+        self.center_prompt.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.center_prompt.setStyleSheet("""
+            QFrame#centerPrompt { background:rgba(20,20,20,210); border:1px solid #333; border-radius:14px; }
+            QLabel#promptTitle { color:#ECECEC; font-weight:600; }
+            QLabel#promptSub    { color:#BDBDBD; }
+        """)
+        cp_layout = QVBoxLayout(self.center_prompt)
+        cp_layout.setContentsMargins(18, 14, 18, 14)
+        cp_layout.setSpacing(6)
+        self.center_prompt_title = QLabel("What do you want to do")
+        self.center_prompt_title.setObjectName("promptTitle")
+        self.center_prompt_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.center_prompt_sub = QLabel("Objective")
+        self.center_prompt_sub.setObjectName("promptSub")
+        self.center_prompt_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cp_layout.addWidget(self.center_prompt_title)
+        cp_layout.addWidget(self.center_prompt_sub)
+        self.center_prompt.raise_()
+        self._layout_center_prompt()  # position/size once
+
     def _simulate_feedback(self) -> Tuple[int, float, float]:
         # Real dt (ms) since last tick for dwell/conf ramps
         dt_ms = max(1, self._tick_clock.restart())
@@ -336,6 +360,8 @@ class NeuroRelayWindow(QMainWindow):
                 self._toggle_fullscreen()
             elif key == Qt.Key.Key_A:
                 self.agent_dock.setVisible(not self.agent_dock.isVisible())
+            elif key == Qt.Key.Key_P:
+                self.center_prompt.setVisible(not self.center_prompt.isVisible())
         return super().eventFilter(obj, event)
 
     def _set_winner(self, idx: int) -> None:
@@ -392,7 +418,26 @@ class NeuroRelayWindow(QMainWindow):
 
     def resizeEvent(self, e):
         self._apply_gutters()
+        self._layout_center_prompt()
         return super().resizeEvent(e)
+
+    def _layout_center_prompt(self) -> None:
+        """Place a prompt card exactly in the grid's center without affecting layout."""
+        if not hasattr(self, "_grid_wrap"):
+            return
+        rect = self._grid_wrap.rect()
+        if rect.isEmpty():
+            return
+        # Size rules: scale with grid area; stay within reasonable bounds
+        W = max(280, min(int(rect.width() * 0.28), 520))
+        H = max(96,  min(int(rect.height() * 0.18), 180))
+        cx, cy = rect.center().x(), rect.center().y()
+        self.center_prompt.setGeometry(cx - W // 2, cy - H // 2, W, H)
+        # Responsive typography
+        title_pt = max(18.0, min(28.0, H * 0.26))
+        sub_pt   = max(12.0, min(18.0, H * 0.16))
+        f1 = self.center_prompt_title.font(); f1.setPointSizeF(title_pt); self.center_prompt_title.setFont(f1)
+        f2 = self.center_prompt_sub.font();   f2.setPointSizeF(sub_pt);   self.center_prompt_sub.setFont(f2)
 
 
 def main(argv: List[str] | None = None) -> int:

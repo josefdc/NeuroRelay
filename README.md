@@ -731,3 +731,149 @@ workspace support.
 - [Settings](https://docs.astral.sh/uv/reference/settings/index.md)
 
 
+=================================
+
+Perfect—your code looks great and the UI polish is in. Here’s a clean, copy-paste-ready block you can drop into the README to document how to run it, the settings, and all keyboard controls.
+
+---
+
+# NeuroRelay — Phase 1 (Stimulus/UI + Replay Harness)
+
+## Quick start
+
+```bash
+# 0) Install UI deps
+uv sync -E ui
+
+# 1) (Optional) generate a synthetic session CSV for future replay/tests
+uv run neurorelay-gen-synth --out data/sim_session.csv --seed 42 --freqs "8.57,10,12,15"
+
+# 2) Launch the 2×2 SSVEP stimulus UI
+uv run neurorelay-ui --config config/default.json --mode sinusoidal --fullscreen
+```
+
+### Useful variants
+
+```bash
+# Auto-pick frequencies from monitor refresh (50 Hz → 8.33/10/12.5/16.67; 60 Hz → 8.57/10/12/15)
+uv run neurorelay-ui --config config/default.json --auto-freqs
+
+# Visual debugging (high-contrast flicker)
+uv run neurorelay-ui --config config/default.json --mode square
+
+# Windowed (no fullscreen)
+uv run neurorelay-ui --config config/default.json
+```
+
+> Tip: For real sessions, prefer `--mode sinusoidal`. Use `--mode square` only for quick visual checks.
+
+---
+
+## What you’ll see
+
+* **2×2 grid** of flickering tiles (SUMMARIZE / TODOS / DEADLINES / EMAIL) with generous **gaze gutters**.
+* **Intensity bar** (always visible) at the bottom left — adjust luminance for comfort.
+* **Agent Dock (placeholder)** at the bottom right — reserved for future BrainBus→Agent messages.
+* **HUD** (hidden by default): mode, monitor Hz, stimulus map, and operator buttons.
+
+---
+
+## Keyboard controls (operator)
+
+* **H** — Toggle HUD (show/hide operator info & buttons)
+* **F11** — Fullscreen ↔ windowed
+* **Space** — Pause / Resume flicker & feedback
+* **ESC** — Exit
+
+**Phase-1 simulator controls (to preview neurofeedback UI):**
+
+* **1** or **← / ↑** — set “winner” to **SUMMARIZE**
+* **2** or **→** — set “winner” to **TODOS**
+* **3** or **↓** — set “winner” to **DEADLINES**
+* **4** — set “winner” to **EMAIL**
+* **A** — Toggle Agent Dock visibility
+
+---
+
+## Operator flow
+
+1. Launch the UI (fullscreen recommended).
+2. Adjust the **Intensity** slider for comfort.
+3. Press **H** if you want to see the HUD and the **Start Evaluate** button.
+4. Press **Start Evaluate** (or just use the simulator keys 1–4) to watch the **confidence underline** fill and the **dwell ring** animate.
+5. **Space** to pause anytime.
+
+---
+
+## Config (defaults in `config/default.json`)
+
+```json
+{
+  "monitor_hz": 60,                      // Display refresh rate (used for timer pacing)
+  "freqs_hz": [8.57, 10.0, 12.0, 15.0],  // Per-tile flicker frequencies (Hz)
+  "window_sec": 3.0,                     // Decision window (for Phase 2+)
+  "step_sec": 0.5,                       // Sliding step (for Phase 2+)
+  "dwell_sec": 1.2,                      // Dwell time to confirm (UI visualization)
+  "tau": 0.65,                           // Confidence threshold (Phase 2+)
+  "channels": ["O1", "Oz", "O2"],        // EEG channels (Phase 2+)
+  "bandpass_hz": [5, 40],                // Preproc band (Phase 2+)
+  "notch_hz": 60,                        // Notch (env matched; Phase 2+)
+  "decoder": "CCA",                      // "CCA" or "FBCCA" (Phase 2+)
+  "artifact_guard": true,                // Blink/EMG guard (Phase 2+)
+  "sandbox_root": "workspace",           // Agent sandbox root (Phase 4)
+  "out_dir": "workspace/out",
+  "flicker_mode": "sinusoidal",          // UI default flicker
+  "ui_intensity": 0.85                   // Initial UI intensity (0..1)
+}
+```
+
+**Auto frequencies:** If you pass `--auto-freqs`, the app derives the four freqs from `monitor_hz`:
+
+* \~**50 Hz** displays → `[Hz/6, Hz/5, Hz/4, Hz/3]` → `8.33, 10, 12.5, 16.67 Hz`
+* otherwise → `[Hz/7, Hz/6, Hz/5, Hz/4]` → `8.57, 10, 12, 15 Hz` for 60 Hz
+
+---
+
+## Agent placeholder
+
+* The **Agent Dock** (bottom-right) shows `agent: waiting… (placeholder)` now.
+* In Phase 4, post events/messages there, e.g.:
+
+  ```
+  agent: summarize → out/report_q3_summary.md  •  conf=0.82
+  ```
+* You can toggle it with **A**.
+
+---
+
+## Synthetic data (for replay/tests)
+
+Generate a CSV with labeled, noisy sinusoids (O1/Oz/O2):
+
+```bash
+uv run neurorelay-gen-synth --out data/sim_session.csv \
+  --sr 250 --monitor-hz 60 --seed 123 --freqs "8.57,10,12,15"
+# or let it compute from the monitor:
+uv run neurorelay-gen-synth --out data/sim_session.csv --freqs auto --monitor-hz 50
+```
+
+*(Replay into a decoder comes in Phase 2 — the harness is ready in `neurorelay.stream.source_replay.ReplayConfig` and `replay_chunks()`.)*
+
+---
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+---
+
+## Tuning notes
+
+* **Gutters** (tile spacing) scale with window size (`~4%` of the smaller dimension, min `24 px`).
+  To widen: change `0.04` → `0.05` in `_apply_gutters()` in `ssvep_4buttons.py`.
+* For quick visual debugging, use `--mode square` and set the intensity slider near **100%**.
+
+---
+
