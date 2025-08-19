@@ -1,3 +1,4 @@
+#pyproject.toml
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
@@ -42,6 +43,8 @@ agent = [
 
 [project.scripts]
 neurorelay = "neurorelay.__main__:main"
+neurorelay-ui = "neurorelay.ui.ssvep_4buttons:main"
+neurorelay-gen-synth = "neurorelay.scripts.synthetic_ssvep:main"
 
 [tool.ruff]
 line-length = 100
@@ -63,3 +66,8 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]

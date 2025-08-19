@@ -12,4 +12,7 @@
   "artifact_guard": true,
   "sandbox_root": "workspace",
   "out_dir": "workspace/out"
+  ,
+  "flicker_mode": "sinusoidal",
+  "ui_intensity": 0.85
 }
