@@ -72,6 +72,48 @@ def luminance_square(t_sec: float, f_hz: float) -> float:
     return 1.0 if s >= 0.0 else 0.0
 
 
+class CenterPanel(QWidget):
+    """A real center cell (not overlay) that keeps a small card centered within it."""
+    def __init__(self, title="What do you want to do", subtitle="Objective", parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("centerContainer")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.card = QFrame(self)
+        self.card.setObjectName("centerCard")
+        self.card.setStyleSheet("""
+            QFrame#centerCard { background:rgba(20,20,20,210); border:1px solid #333; border-radius:14px; }
+            QLabel#centerTitle { color:#ECECEC; font-weight:600; }
+            QLabel#centerSub   { color:#BDBDBD; }
+        """)
+        card_lay = QVBoxLayout(self.card)
+        card_lay.setContentsMargins(18, 14, 18, 14)
+        card_lay.setSpacing(6)
+
+        self.title = QLabel(title, self.card)
+        self.title.setObjectName("centerTitle")
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sub = QLabel(subtitle, self.card)
+        self.sub.setObjectName("centerSub")
+        self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card_lay.addWidget(self.title)
+        card_lay.addWidget(self.sub)
+        lay.addWidget(self.card, 0, Qt.AlignmentFlag.AlignCenter)
+
+    def resizeEvent(self, e):
+        # Responsive typography based on available height of the center cell
+        h = max(80, self.height())
+        title_pt = max(18.0, min(28.0, h * 0.18))
+        sub_pt   = max(12.0, min(18.0, h * 0.12))
+        f1 = self.title.font(); f1.setPointSizeF(title_pt); self.title.setFont(f1)
+        f2 = self.sub.font();   f2.setPointSizeF(sub_pt);   self.sub.setFont(f2)
+        super().resizeEvent(e)
+
+
 class FlickerTile(QWidget):
     def __init__(
         self,
@@ -197,19 +239,39 @@ class NeuroRelayWindow(QMainWindow):
         self.is_paused = False
 
         assert len(cfg.freqs_hz) == 4, "Expect 4 frequencies for 4 tiles"
-        self.tiles: List[FlickerTile] = []
-
+        
+        # --- 3×3 grid: corners = tiles, center = reserved gap for agent/LLM ---
         grid = QGridLayout()
-        grid.setSpacing(12)
+        grid.setSpacing(12)  # small general spacing; center gap size handled separately
+        self._grid = grid
+
+        # Tiles
+        self.tiles: List[FlickerTile] = []
         for i, label in enumerate(self.LABELS):
             tile = FlickerTile(label, cfg.freqs_hz[i], mode=cfg.flicker_mode, intensity=cfg.intensity)
             self.tiles.append(tile)
-            grid.addWidget(tile, i // 2, i % 2)
+
+        # Place tiles in the four corners of a 3×3 grid
+        grid.addWidget(self.tiles[0], 0, 0)  # SUMMARIZE (top-left)
+        grid.addWidget(self.tiles[1], 0, 2)  # TODOS     (top-right)
+        grid.addWidget(self.tiles[2], 2, 0)  # DEADLINES (bottom-left)
+        grid.addWidget(self.tiles[3], 2, 2)  # EMAIL     (bottom-right)
+
+        # Real center cell reserved for the agent placeholder (no overlay)
+        self.center_panel = CenterPanel("What do you want to do", "Objective", self)
+        grid.addWidget(self.center_panel, 1, 1)
+
+        # Let outer cells expand; keep the center's size controlled by min width/height
+        for r in (0, 2):
+            grid.setRowStretch(r, 1)
+        for c in (0, 2):
+            grid.setColumnStretch(c, 1)
+        grid.setRowStretch(1, 0)
+        grid.setColumnStretch(1, 0)
 
         # Wrap grid so we can control margins independent of other widgets
         grid_wrap = QWidget()
         grid_wrap.setLayout(grid)
-        self._grid = grid
         self._grid_wrap = grid_wrap
 
         self.mode_label = QLabel(f"Mode: {self.state.upper()}")
@@ -303,29 +365,6 @@ class NeuroRelayWindow(QMainWindow):
         # Apply initial gutters around/within the grid
         self._apply_gutters()
 
-        # ---- Center prompt (overlay) ----
-        self.center_prompt = QFrame(self._grid_wrap)
-        self.center_prompt.setObjectName("centerPrompt")
-        self.center_prompt.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.center_prompt.setStyleSheet("""
-            QFrame#centerPrompt { background:rgba(20,20,20,210); border:1px solid #333; border-radius:14px; }
-            QLabel#promptTitle { color:#ECECEC; font-weight:600; }
-            QLabel#promptSub    { color:#BDBDBD; }
-        """)
-        cp_layout = QVBoxLayout(self.center_prompt)
-        cp_layout.setContentsMargins(18, 14, 18, 14)
-        cp_layout.setSpacing(6)
-        self.center_prompt_title = QLabel("What do you want to do")
-        self.center_prompt_title.setObjectName("promptTitle")
-        self.center_prompt_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.center_prompt_sub = QLabel("Objective")
-        self.center_prompt_sub.setObjectName("promptSub")
-        self.center_prompt_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cp_layout.addWidget(self.center_prompt_title)
-        cp_layout.addWidget(self.center_prompt_sub)
-        self.center_prompt.raise_()
-        self._layout_center_prompt()  # position/size once
-
     def _simulate_feedback(self) -> Tuple[int, float, float]:
         # Real dt (ms) since last tick for dwell/conf ramps
         dt_ms = max(1, self._tick_clock.restart())
@@ -361,7 +400,7 @@ class NeuroRelayWindow(QMainWindow):
             elif key == Qt.Key.Key_A:
                 self.agent_dock.setVisible(not self.agent_dock.isVisible())
             elif key == Qt.Key.Key_P:
-                self.center_prompt.setVisible(not self.center_prompt.isVisible())
+                self.center_panel.setVisible(not self.center_panel.isVisible())
         return super().eventFilter(obj, event)
 
     def _set_winner(self, idx: int) -> None:
@@ -410,34 +449,27 @@ class NeuroRelayWindow(QMainWindow):
 
     # --- Layout helpers ---
     def _apply_gutters(self) -> None:
-        """Set dynamic spacing/margins so tiles are further apart (gaze gutters)."""
-        g = max(24, int(min(self.width(), self.height()) * 0.04))  # ~4% of min dimension
-        self._grid.setHorizontalSpacing(g)
-        self._grid.setVerticalSpacing(g)
-        self._grid.setContentsMargins(g, g, g, g)
+        """
+        Outer gutters + a fixed-size central gap cell.
+        - Outer margins scale with window
+        - Center row/col get explicit minimum sizes so the agent panel has a home
+        """
+        min_dim = max(1, min(self.width(), self.height()))
+        outer = max(24, int(min_dim * 0.035))        # outer margin
+        spacing = max(10, int(min_dim * 0.012))      # general inter-cell spacing
+        center_gap = max(120, int(min_dim * 0.16))   # central cell size
+
+        self._grid.setContentsMargins(outer, outer, outer, outer)
+        self._grid.setHorizontalSpacing(spacing)
+        self._grid.setVerticalSpacing(spacing)
+
+        # Reserve the middle row/column for the central gap (and our center_panel)
+        self._grid.setRowMinimumHeight(1, center_gap)
+        self._grid.setColumnMinimumWidth(1, center_gap)
 
     def resizeEvent(self, e):
         self._apply_gutters()
-        self._layout_center_prompt()
         return super().resizeEvent(e)
-
-    def _layout_center_prompt(self) -> None:
-        """Place a prompt card exactly in the grid's center without affecting layout."""
-        if not hasattr(self, "_grid_wrap"):
-            return
-        rect = self._grid_wrap.rect()
-        if rect.isEmpty():
-            return
-        # Size rules: scale with grid area; stay within reasonable bounds
-        W = max(280, min(int(rect.width() * 0.28), 520))
-        H = max(96,  min(int(rect.height() * 0.18), 180))
-        cx, cy = rect.center().x(), rect.center().y()
-        self.center_prompt.setGeometry(cx - W // 2, cy - H // 2, W, H)
-        # Responsive typography
-        title_pt = max(18.0, min(28.0, H * 0.26))
-        sub_pt   = max(12.0, min(18.0, H * 0.16))
-        f1 = self.center_prompt_title.font(); f1.setPointSizeF(title_pt); self.center_prompt_title.setFont(f1)
-        f2 = self.center_prompt_sub.font();   f2.setPointSizeF(sub_pt);   self.center_prompt_sub.setFont(f2)
 
 
 def main(argv: List[str] | None = None) -> int:
