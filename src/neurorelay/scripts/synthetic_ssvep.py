@@ -96,6 +96,8 @@ def main() -> int:
     else:
         freqs = (8.57, 10.0, 12.0, 15.0)
     
+    print(f"Using frequencies: {freqs}")
+    
     make_session(
         out_csv=out, 
         sample_rate_hz=args.sr, 

@@ -147,6 +147,7 @@ class NeuroRelayWindow(QMainWindow):
     def __init__(self, cfg: UiConfig, config_path: Path) -> None:
         super().__init__()
         self.setWindowTitle("NeuroRelay — SSVEP 4-Option (Phase 1)")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.cfg = cfg
         self.config_path = config_path
         self.state = "idle"
@@ -207,14 +208,15 @@ class NeuroRelayWindow(QMainWindow):
         interval_ms = max(1, int(round(1000.0 / max(1.0, self.cfg.monitor_hz))))
         self._timer.start(interval_ms)
 
-        self._sim_elapsed = QElapsedTimer()
-        self._sim_elapsed.start()
+        self._tick_clock = QElapsedTimer()
+        self._tick_clock.start()
         self._winner_idx = 0
         self._winner_hold_ms = 0
         self.installEventFilter(self)
 
     def _simulate_feedback(self) -> Tuple[int, float, float]:
-        dt_ms = 16
+        # Real dt (ms) since last tick for dwell/conf ramps
+        dt_ms = max(1, self._tick_clock.restart())
         if self.state == "evaluate" and not self.is_paused:
             self._winner_hold_ms += dt_ms
         else:
@@ -238,6 +240,8 @@ class NeuroRelayWindow(QMainWindow):
                 self._set_winner(3)
             elif key == Qt.Key.Key_Space:
                 self._on_pause()
+            elif key == Qt.Key.Key_Escape:
+                self.close()
         return super().eventFilter(obj, event)
 
     def _set_winner(self, idx: int) -> None:
@@ -284,8 +288,12 @@ def main(argv: List[str] | None = None) -> int:
     cfg.flicker_mode = args.mode
     if args.auto_freqs:
         mhz = max(1.0, cfg.monitor_hz)
-        cfg.freqs_hz = [mhz / d for d in (7.0, 6.0, 5.0, 4.0)]
-        print(f"Auto frequencies for {mhz} Hz: {cfg.freqs_hz}")
+        if 45.0 <= mhz <= 55.0:
+            divisors = (6.0, 5.0, 4.0, 3.0)   # 50 Hz → 8.33, 10, 12.5, 16.67
+        else:
+            divisors = (7.0, 6.0, 5.0, 4.0)   # 60 Hz → 8.57, 10, 12, 15
+        cfg.freqs_hz = [mhz / d for d in divisors]
+        print(f"Auto frequencies for {mhz:.2f} Hz: {cfg.freqs_hz}")
 
     app = QApplication([])
     win = NeuroRelayWindow(cfg, config_path=config_path)

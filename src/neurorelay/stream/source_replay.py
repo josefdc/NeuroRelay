@@ -1,3 +1,4 @@
+#src/neurorelay/stream/source_replay.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ import numpy as np
 class ReplayConfig:
     sample_rate_hz: float = 250.0
     chunk_sec: float = 1.0
+    realtime: bool = True            # pace with time.sleep(chunk_sec)
     channels: List[str] | None = None
 
     def __post_init__(self):
@@ -43,9 +45,6 @@ def load_csv(path: Path) -> Tuple[np.ndarray, List[str]]:
     return arr, header
 
 
-essr = 1e-9
-
-
 def replay_chunks(path: Path, cfg: ReplayConfig) -> Generator[np.ndarray, None, None]:
     """
     Stream CSV in chunks of cfg.chunk_sec without loading everything into memory.
@@ -66,7 +65,8 @@ def replay_chunks(path: Path, cfg: ReplayConfig) -> Generator[np.ndarray, None, 
                 x = np.asarray(buf, dtype=float)
                 yield x
                 buf.clear()
-                time.sleep(cfg.chunk_sec)  # pace at ~real-time
+                if cfg.realtime and cfg.chunk_sec > 0:
+                    time.sleep(cfg.chunk_sec)  # pace at ~real-time
 
         if buf:
             x = np.asarray(buf, dtype=float)
