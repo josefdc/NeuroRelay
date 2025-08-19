@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPaintEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -205,6 +206,11 @@ class NeuroRelayWindow(QMainWindow):
             self.tiles.append(tile)
             grid.addWidget(tile, i // 2, i % 2)
 
+        # Wrap grid so we can control margins independent of other widgets
+        grid_wrap = QWidget()
+        grid_wrap.setLayout(grid)
+        self._grid = grid
+
         self.mode_label = QLabel(f"Mode: {self.state.upper()}")
         self.mode_label.setStyleSheet("font-weight:600;")
         self.hz_label = QLabel(
@@ -222,30 +228,62 @@ class NeuroRelayWindow(QMainWindow):
         self.btn_pause = QPushButton("Pause")
         self.btn_pause.clicked.connect(self._on_pause)
 
+        # Intensity (always visible, not part of HUD)
+        self.lbl_intensity = QLabel("Intensity")
+        self.lbl_intensity.setStyleSheet("color:#bbb;")
         self.intensity_slider = QSlider(Qt.Orientation.Horizontal)
         self.intensity_slider.setRange(25, 100)
         self.intensity_slider.setValue(int(cfg.intensity * 100))
         self.intensity_slider.valueChanged.connect(self._on_intensity)
+        # Make the slider visually obvious
+        self.intensity_slider.setMinimumWidth(320)
+        self.intensity_slider.setStyleSheet("""
+            QSlider::groove:horizontal { height: 6px; background:#3a3a3a; border-radius:3px; }
+            QSlider::handle:horizontal { width:18px; background:#e6e6e6; border-radius:9px; margin:-6px 0; }
+            QSlider::sub-page:horizontal { background:#e6e6e6; border-radius:3px; }
+        """)
 
-        controls = QHBoxLayout()
-        controls.addWidget(self.btn_start)
-        controls.addWidget(self.btn_pause)
-        controls.addWidget(QLabel("Intensity"))
-        controls.addWidget(self.intensity_slider)
+        # Agent Dock (placeholder) — future home for BrainBus→Agent results
+        self.agent_dock = QFrame()
+        self.agent_dock.setObjectName("agentDock")
+        self.agent_dock.setStyleSheet("""
+            QFrame#agentDock { background:#1e1e1e; border:1px solid #333; border-radius:10px; }
+            QLabel#agentText { color:#bbb; }
+        """)
+        dock_layout = QHBoxLayout(self.agent_dock)
+        dock_layout.setContentsMargins(10, 6, 10, 6)
+        self.agent_label = QLabel("agent: waiting… (placeholder)")
+        self.agent_label.setObjectName("agentText")
+        dock_layout.addWidget(self.agent_label)
+
+        # Controls row 1: operator buttons (HUD), hidden by default
+        ops = QHBoxLayout()
+        ops.addWidget(self.btn_start)
+        ops.addWidget(self.btn_pause)
+        ops.addStretch()
+
+        # Controls row 2: intensity (always visible) + agent dock on the right
+        stim = QHBoxLayout()
+        stim.addWidget(self.lbl_intensity)
+        stim.addWidget(self.intensity_slider, 1)
+        stim.addStretch()
+        stim.addWidget(self.agent_dock)
 
         root = QWidget()
         v = QVBoxLayout(root)
+        v.setContentsMargins(0, 0, 0, 0)
         v.addWidget(self.mode_label)
         v.addWidget(self.hz_label)
-        v.addLayout(grid)
-        v.addLayout(controls)
+        v.addWidget(grid_wrap, 1)     # make grid expand; other rows take minimal space
+        v.addLayout(stim)             # visible always
+        v.addLayout(ops)              # HUD row
         v.addWidget(self.map_label)
         v.addWidget(self.cfg_label)
         self.setCentralWidget(root)
         
-        # Minimal by default (HUD hidden)
+        # Minimal by default (HUD hidden) — intensity row remains visible
         self._hud_visible = False
-        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause, self.intensity_slider):
+        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause):
             w.setVisible(self._hud_visible)
 
         self._timer = QTimer(self)
@@ -260,6 +298,9 @@ class NeuroRelayWindow(QMainWindow):
         self._winner_idx = 0
         self._winner_hold_ms = 0
         self.installEventFilter(self)
+
+        # Apply initial gutters around/within the grid
+        self._apply_gutters()
 
     def _simulate_feedback(self) -> Tuple[int, float, float]:
         # Real dt (ms) since last tick for dwell/conf ramps
@@ -293,6 +334,8 @@ class NeuroRelayWindow(QMainWindow):
                 self._toggle_hud()
             elif key in (Qt.Key.Key_F11,):
                 self._toggle_fullscreen()
+            elif key == Qt.Key.Key_A:
+                self.agent_dock.setVisible(not self.agent_dock.isVisible())
         return super().eventFilter(obj, event)
 
     def _set_winner(self, idx: int) -> None:
@@ -316,7 +359,7 @@ class NeuroRelayWindow(QMainWindow):
 
     def _toggle_hud(self) -> None:
         self._hud_visible = not self._hud_visible
-        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause, self.intensity_slider):
+        for w in (self.mode_label, self.hz_label, self.map_label, self.cfg_label, self.btn_start, self.btn_pause):
             w.setVisible(self._hud_visible)
 
     def _toggle_fullscreen(self) -> None:
@@ -338,6 +381,18 @@ class NeuroRelayWindow(QMainWindow):
             )
             if not self.is_paused:
                 tile.update()
+
+    # --- Layout helpers ---
+    def _apply_gutters(self) -> None:
+        """Set dynamic spacing/margins so tiles are further apart (gaze gutters)."""
+        g = max(24, int(min(self.width(), self.height()) * 0.04))  # ~4% of min dimension
+        self._grid.setHorizontalSpacing(g)
+        self._grid.setVerticalSpacing(g)
+        self._grid.setContentsMargins(g, g, g, g)
+
+    def resizeEvent(self, e):
+        self._apply_gutters()
+        return super().resizeEvent(e)
 
 
 def main(argv: List[str] | None = None) -> int:
