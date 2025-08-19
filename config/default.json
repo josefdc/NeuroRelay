@@ -1,0 +1,15 @@
+{
+  "monitor_hz": 60,
+  "freqs_hz": [8.57, 10.0, 12.0, 15.0],
+  "window_sec": 3.0,
+  "step_sec": 0.5,
+  "dwell_sec": 1.2,
+  "tau": 0.65,
+  "channels": ["O1", "Oz", "O2"],
+  "bandpass_hz": [5, 40],
+  "notch_hz": 60,
+  "decoder": "CCA",
+  "artifact_guard": true,
+  "sandbox_root": "workspace",
+  "out_dir": "workspace/out"
+}

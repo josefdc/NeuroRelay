@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual envs (uv uses .venv by default)
+.venv/
+
+# Project artifacts
+logs/
+workspace/out/
+workspace/tmp/
+data/
+
+# EEG / binary data (examples)
+*.edf
+*.set
+*.fdt
+
+# OS cruft
+.DS_Store
+Thumbs.db

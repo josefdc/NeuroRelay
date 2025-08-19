@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neurorelay"
+version = "0.1.0"
+description = "Offline SSVEP brain-to-agent demo (4-option) with local agent"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "NeuroRelay Team" }]
+license = { text = "MIT" }
+keywords = ["ssvep", "eeg", "bci", "offline", "PySide6", "LSL"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+]
+
+# Core runtime deps (keep Phase 0 minimal; UI/LSL/EDF as extras)
+dependencies = [
+  "numpy>=1.25",
+  "scipy>=1.11",
+  "pydantic>=2.5"
+]
+
+[project.optional-dependencies]
+# Install when you start Phase 1 UI: uv sync -E ui
+ui = ["PySide6>=6.7"]
+# Install when you wire live bridge: uv sync -E stream
+stream = ["pylsl>=1.16"]
+# Install when you add replay from EDF: uv sync -E replay
+replay = ["pyedflib>=0.1.34"]
+# Agent tools later (PDF/Doc parsing), install on demand: uv sync -E agent
+agent = [
+  "pdfminer.six>=20221105",
+  "python-docx>=1.0.0",
+  "markdown-it-py>=3.0.0"
+]
+
+[project.scripts]
+neurorelay = "neurorelay.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501", "D"]  # let black handle wrapping; disable pydoc checks for now
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
