@@ -45,6 +45,7 @@ agent = [
 neurorelay = "neurorelay.__main__:main"
 neurorelay-ui = "neurorelay.ui.ssvep_4buttons:main"
 neurorelay-gen-synth = "neurorelay.scripts.synthetic_ssvep:main"
+neurorelay-stream-demo = "neurorelay.scripts.stream_demo:main"
 
 [tool.ruff]
 line-length = 100
