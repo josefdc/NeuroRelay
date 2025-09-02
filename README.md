@@ -650,7 +650,118 @@ Ship a reliable demo & repo: **robust UX**, reproducible **replay** path, and a 
 This plan keeps us laser‑focused on **Proposed Solution 1**: a **reliable, offline, 4‑choice SSVEP brain‑to‑agent** that’s useful, auditable, and demo‑ready.
 ----
 
-# uv
+# Phase 4 — Local Agent Integration (LM Studio + BrainBus) ✅
+
+NeuroRelay now turns brain selections into **useful, offline actions** via a local agent powered by **LM Studio** running **gpt‑oss‑20b/120b**. The UI sends **BrainBus JSON** to a subprocess agent; the agent runs one of four tools inside your `workspace/` sandbox and logs auditable JSONL.
+
+## One‑time setup
+
+```bash
+# Install Phase 1–3 + agent extras
+uv sync --extra ui --extra agent
+```
+
+### Install & run LM Studio (optional, but recommended)
+
+LM Studio exposes a local **/v1/chat/completions** endpoint that the agent can call **offline**.
+
+1. Install LM Studio (Windows/macOS/Linux)
+2. Download & load a gpt‑oss model
+
+   * `openai/gpt-oss-20b` (fits on good consumer GPUs / Apple Silicon)
+   * `openai/gpt-oss-120b` (≥60GB VRAM)
+3. Start the local server (`Settings → Developer → Enable local server`) so it listens on `http://localhost:1234/v1`.
+
+> The agent automatically detects LM Studio. If it's not running, it falls back to **heuristic** summaries/emails.
+
+Environment overrides (optional):
+
+```bash
+export NEURORELAY_LMSTUDIO_URL="http://localhost:1234/v1"
+export NEURORELAY_GPT_MODEL="openai/gpt-oss-20b"
+export NEURORELAY_LLM_TIMEOUT=30
+```
+
+## Run the live demo
+
+```bash
+# Start your EEG LSL stream (OpenBCI, Neuroscan via CURRY→MATLAB, etc.)
+
+# Launch the UI in live mode (or omit --live to use Phase-1 simulator)
+uv run neurorelay-ui --live --auto-freqs --prediction-rate 4
+```
+
+What happens:
+
+* Gaze → SSVEP detection (CCA) → dwell confirm → UI **commits** selection.
+* UI posts a **BrainBus JSON** event to the local agent.
+* Agent executes the tool **inside `workspace/`** and writes outputs to **`workspace/out/`**.
+* Agent Dock shows:
+  `agent: summarize → workspace/out/report_summary.md • conf=0.82`
+
+### Folder conventions
+
+```
+workspace/
+├─ in/        # put input docs here (pdf/txt/md/docx)
+└─ out/       # results (summary/todos/deadlines/email drafts)
+```
+
+If you don't specify a file, the agent uses the **most recent** file from `workspace/in`.
+
+## Tools
+
+1. **summarize(file)** → `out/<basename>_summary.md`
+   LM Studio‑backed chunked summary, fallback heuristic if LM Studio not running.
+2. **extract\_todos(file)** → `out/<basename>_todos.md`
+   Imperative lines, `@owner` detection, deadline markers → checkboxes.
+3. **flag\_deadlines(file)** → `out/<basename>_deadlines.md` (+ `.ics`)
+   Extracts due/deliver/submit/by/on phrases, parses dates, writes optional calendar.
+4. **compose\_email(topic, attachments?)** → `out/draft_<ts>.md`
+   Concise email (Subject + body). Attaches the active file name in the prompt.
+
+## BrainBus events (examples)
+
+UI → Agent:
+
+```json
+{
+  "ts": "auto",
+  "decoder": {"type":"SSVEP","version":"0.1.0"},
+  "intent": {"name":"SELECT","args":{"label":"SUMMARIZE","index":0}},
+  "confidence": 0.81,
+  "context": { "file": "workspace/in/report_q3.pdf" }
+}
+```
+
+Agent → UI:
+
+```json
+{
+  "type": "agent_result",
+  "ts": "2025-09-02T12:34:56.123Z",
+  "label": "SUMMARIZE",
+  "confidence": 0.81,
+  "status": "ok",
+  "tool": "summarize",
+  "out": "workspace/out/report_q3_summary.md"
+}
+```
+
+## Logs
+
+* `logs/agent.jsonl` — every event & result (rotating is easy to add)
+* `logs/*.jsonl` from the rest of the system remain unchanged
+
+## Safety & Privacy
+
+* **Offline**: No internet usage. LM Studio, if used, is **local only** (`localhost`).
+* **Sandboxed**: Reads from `workspace/in/`, writes to `workspace/out/`.
+* **Non‑destructive**: Draft files only; **no email is actually sent**.
+
+---
+
+## uv
 
 > uv is an extremely fast Python package and project manager, written in Rust.
 

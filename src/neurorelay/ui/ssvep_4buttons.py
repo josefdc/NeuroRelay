@@ -18,11 +18,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QSlider,
     QVBoxLayout,
     QWidget,
 )
+
+# NEW imports for Phase 4
+from ..bus.brainbus import AgentProcess
 
 
 @dataclass
@@ -231,6 +235,26 @@ class FlickerTile(QWidget):
 class NeuroRelayWindow(QMainWindow):
     LABELS = ("SUMMARIZE", "TODOS", "DEADLINES", "EMAIL")
 
+    def _pick_active_document(self) -> Optional[Path]:
+        try:
+            raw_cfg = json.loads(self.config_path.read_text())
+        except Exception:
+            raw_cfg = {}
+        sandbox_root = Path(raw_cfg.get("sandbox_root", "workspace"))
+        in_dir = sandbox_root / "in"
+        if not in_dir.exists():
+            return None
+        best = None
+        best_m = -1
+        exts = {".txt", ".md", ".pdf", ".docx"}
+        for p in in_dir.glob("**/*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                m = p.stat().st_mtime
+                if m > best_m:
+                    best_m = m
+                    best = p
+        return best
+
     def __init__(
         self,
         cfg: UiConfig,
@@ -337,6 +361,24 @@ class NeuroRelayWindow(QMainWindow):
         self.agent_label.setObjectName("agentText")
         dock_layout.addWidget(self.agent_label)
 
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+
+        # Open button
+        self.open_btn = QPushButton("Open")
+        self.open_btn.clicked.connect(self._open_last_output)
+        self.open_btn.setVisible(False)
+
+        # Status label 
+        self.status_label = QLabel("Ready")
+        
+        # LM Studio status label
+        self.lm_studio_label = QLabel("LM Studio: Unknown")
+        self.lm_studio_label.setStyleSheet("color: gray;")
+
         # Live link status lamp + label
         self.link_dot = QFrame()
         self.link_dot.setFixedSize(14, 14)
@@ -359,6 +401,13 @@ class NeuroRelayWindow(QMainWindow):
         stim.addStretch()
         stim.addWidget(self.agent_dock)
 
+        # Progress and controls row
+        progress_layout = QHBoxLayout()
+        progress_layout.addWidget(self.progress_bar, 1)
+        progress_layout.addWidget(self.open_btn)
+        progress_layout.addWidget(self.lm_studio_label)
+        progress_layout.addWidget(self.status_label)
+
         root = QWidget()
         v = QVBoxLayout(root)
         v.setContentsMargins(0, 0, 0, 0)
@@ -366,6 +415,7 @@ class NeuroRelayWindow(QMainWindow):
         v.addWidget(self.hz_label)
         v.addWidget(grid_wrap, 1)     # make grid expand; other rows take minimal space
         v.addLayout(stim)             # visible always
+        v.addLayout(progress_layout)  # progress, open, and status
         v.addLayout(ops)              # HUD row
         v.addWidget(self.map_label)
         v.addWidget(self.cfg_label)
@@ -402,6 +452,22 @@ class NeuroRelayWindow(QMainWindow):
         self._commit_cooldown_sec: float = 0.75  # ~3 prediction ticks @ 4 Hz
         self._last_commit_ts: float = 0.0
         self._commit_cooldown_sec: float = 0.75  # ~3 prediction ticks @ 4 Hz
+
+        # Active document (if any) to show in center panel subtitle
+        self._active_doc: Optional[Path] = self._pick_active_document()
+        if self._active_doc:
+            self.center_panel.sub.setText(f"Active document: {self._active_doc.name}")
+        else:
+            self.center_panel.sub.setText("Place a file in workspace/in/")
+
+        # Track last output path for Open button
+        self._last_output_path: Optional[str] = None
+
+        # Start BrainBus agent subprocess (Phase 4)
+        self.agent_proc = AgentProcess(self, cwd=Path("."))
+        self.agent_proc.message.connect(self._on_agent_message)  # type: ignore
+        self.agent_proc.error.connect(lambda msg: self.statusBar().showMessage(msg, 4000))  # type: ignore
+        self.agent_proc.start()
 
         # Apply initial gutters around/within the grid
         self._apply_gutters()
@@ -663,15 +729,134 @@ class NeuroRelayWindow(QMainWindow):
     def _commit_selection(self, idx: int, conf: float) -> None:
         self._last_commit_ts = time.monotonic()
         label = self.LABELS[idx]
-        self.agent_label.setText(f"agent: {label.lower()} • conf={conf:.2f} (Phase 3 commit)")
+        # Prepare context
+        try:
+            raw_cfg = json.loads(self.config_path.read_text())
+        except Exception:
+            raw_cfg = {}
+        sandbox_root = Path(raw_cfg.get("sandbox_root", "workspace"))
+        context: dict = {}
+
+        if label in ("SUMMARIZE", "TODOS", "DEADLINES"):
+            # Ensure active doc (pick latest if needed)
+            self._active_doc = self._pick_active_document()
+            if self._active_doc and self._active_doc.exists():
+                context["file"] = str(self._active_doc)
+            else:
+                self._status("No document in workspace/in/ — agent will warn")
+        else:
+            # EMAIL — lightweight default topic
+            context["topic"] = f"Follow-up on {self._active_doc.name if self._active_doc else 'the document'}"
+
+        event = {
+            "ts": "auto",
+            "decoder": {"type": "SSVEP", "version": "0.1.0"},
+            "intent": {"name": "SELECT", "args": {"label": label, "index": idx}},
+            "confidence": float(conf),
+            "context": context,
+        }
+        if self.agent_proc and self.agent_proc.is_running():
+            self.agent_proc.send(event)
+
+        self.agent_label.setText(f"agent: {label.lower()} • pending…  (conf={conf:.2f})")
         self._status(f"Committed: {label} (conf={conf:.2f})")
         # Reset dwell for next selection
         self._dwell_start_ts = None
         self._dwell_winner_idx = None
-        # Optionally return to idle; keep evaluate for repeated selections
-        # self.state = "idle"
+
+    def _on_agent_message(self, obj: dict) -> None:
+        typ = obj.get("type", "")
+        if typ == "agent_result":
+            # Reset progress bar
+            self.progress_bar.setVisible(False)
+            self.progress_bar.setValue(0)
+            
+            status = obj.get("status", "")
+            label = (obj.get("label") or "").lower()
+            out_path = obj.get("out")
+            if status == "ok":
+                self.agent_label.setText(f"agent: {label} → {out_path}  •  conf={obj.get('confidence', 0):.2f}")
+                self._status(f"Agent finished: {label} → {out_path}")
+                # Store last output path and show Open button
+                self._last_output_path = out_path
+                self.open_btn.setVisible(True)
+            else:
+                err = obj.get("error", "unknown")
+                self.agent_label.setText(f"agent: error — {err}")
+                self._status(f"Agent error: {err}")
+        elif typ == "agent_hello":
+            lm_mode = obj.get("lm_studio_mode", "unknown")
+            if lm_mode == "available":
+                self.lm_studio_label.setText("LM Studio: Available")
+                self.lm_studio_label.setStyleSheet("color: green;")
+            elif lm_mode == "unavailable":
+                self.lm_studio_label.setText("LM Studio: Unavailable")
+                self.lm_studio_label.setStyleSheet("color: red;")
+            else:
+                self.lm_studio_label.setText("LM Studio: Unknown")
+                self.lm_studio_label.setStyleSheet("color: gray;")
+            self._status("Agent connected")
+        elif typ == "progress":
+            progress = obj.get("progress", 0)
+            message = obj.get("message", "Working...")
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(progress)
+            self._status(message)
+        elif typ == "agent_error":
+            # Reset progress bar
+            self.progress_bar.setVisible(False)
+            self.progress_bar.setValue(0)
+            self._status(str(obj.get("error", "agent error")))
+
+    def _open_last_output(self) -> None:
+        """Open the most recently created agent output file"""
+        if self._last_output_path:
+            import subprocess
+            try:
+                file_path = Path(self._last_output_path)
+                if file_path.exists():
+                    subprocess.Popen(["xdg-open", str(file_path)])
+                    self._status(f"Opened: {file_path.name}")
+                else:
+                    self._status(f"File not found: {file_path}")
+            except Exception as e:
+                self._status(f"Failed to open file: {e}")
+        else:
+            # Fallback to scanning workspace/out/
+            output_path = Path("workspace/out")
+            if not output_path.exists():
+                self._status("No output directory found")
+                return
+                
+            latest_file = self._pick_latest_file(output_path)
+            if latest_file:
+                import subprocess
+                try:
+                    subprocess.Popen(["xdg-open", str(latest_file)])
+                    self._status(f"Opened: {latest_file.name}")
+                except Exception as e:
+                    self._status(f"Failed to open file: {e}")
+            else:
+                self._status("No output files found")
+
+    def _pick_latest_file(self, directory: Path) -> Optional[Path]:
+        """Find the most recently modified file in a directory"""
+        latest = None
+        latest_time = 0
+        for file_path in directory.rglob("*"):
+            if file_path.is_file():
+                mtime = file_path.stat().st_mtime
+                if mtime > latest_time:
+                    latest_time = mtime
+                    latest = file_path
+        return latest
 
     def closeEvent(self, e):
+        if hasattr(self, 'agent_proc') and self.agent_proc:
+            try:
+                self.agent_proc.stop()
+            except Exception:
+                pass
         if self.live_predictor:
             try:
                 self.live_predictor.stop()
