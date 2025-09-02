@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+import numpy as np
 
 from PySide6.QtCore import Qt, QElapsedTimer, QTimer, QRectF, QSize
 from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPaintEvent, QPalette
@@ -229,14 +231,30 @@ class FlickerTile(QWidget):
 class NeuroRelayWindow(QMainWindow):
     LABELS = ("SUMMARIZE", "TODOS", "DEADLINES", "EMAIL")
 
-    def __init__(self, cfg: UiConfig, config_path: Path) -> None:
+    def __init__(
+        self,
+        cfg: UiConfig,
+        config_path: Path,
+        *,
+        live: bool = False,
+        lsl_type: str = "EEG",
+        lsl_name: Optional[str] = None,
+        lsl_timeout: float = 5.0,
+        prediction_rate_hz: float = 4.0,
+    ) -> None:
         super().__init__()
-        self.setWindowTitle("NeuroRelay — SSVEP 4-Option (Phase 1)")
+        title = "NeuroRelay — SSVEP 4-Option (Live)" if live else "NeuroRelay — SSVEP 4-Option (Phase 1)"
+        self.setWindowTitle(title)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.cfg = cfg
         self.config_path = config_path
         self.state = "idle"
         self.is_paused = False
+        self.live_enabled = bool(live)
+        self.lsl_type = lsl_type
+        self.lsl_name = lsl_name
+        self.lsl_timeout = float(lsl_timeout)
+        self.prediction_rate_hz = float(prediction_rate_hz)
 
         assert len(cfg.freqs_hz) == 4, "Expect 4 frequencies for 4 tiles"
         
@@ -319,6 +337,13 @@ class NeuroRelayWindow(QMainWindow):
         self.agent_label.setObjectName("agentText")
         dock_layout.addWidget(self.agent_label)
 
+        # Live link status lamp + label
+        self.link_dot = QFrame()
+        self.link_dot.setFixedSize(14, 14)
+        self.link_dot.setStyleSheet("background:#a33; border-radius:7px; border:1px solid #222;")
+        self.link_label = QLabel("Live: disconnected")
+        self.link_label.setStyleSheet("color:#bbb;")
+
         # Controls row 1: operator buttons (HUD), hidden by default
         ops = QHBoxLayout()
         ops.addWidget(self.btn_start)
@@ -329,6 +354,8 @@ class NeuroRelayWindow(QMainWindow):
         stim = QHBoxLayout()
         stim.addWidget(self.lbl_intensity)
         stim.addWidget(self.intensity_slider, 1)
+        stim.addWidget(self.link_dot)
+        stim.addWidget(self.link_label)
         stim.addStretch()
         stim.addWidget(self.agent_dock)
 
@@ -362,8 +389,26 @@ class NeuroRelayWindow(QMainWindow):
         self._winner_hold_ms = 0
         self.installEventFilter(self)
 
+        # Live predictor state (Phase 3)
+        self.live_predictor = None
+        self._last_prediction_ts = 0.0
+        self._display_conf = [0.0, 0.0, 0.0, 0.0]
+        self._current_top_idx: Optional[int] = None
+        self._stable_idx: Optional[int] = None
+        self._stable_count = 0
+        self._dwell_winner_idx: Optional[int] = None
+        self._dwell_start_ts: Optional[float] = None
+        self._last_commit_ts: float = 0.0
+        self._commit_cooldown_sec: float = 0.75  # ~3 prediction ticks @ 4 Hz
+        self._last_commit_ts: float = 0.0
+        self._commit_cooldown_sec: float = 0.75  # ~3 prediction ticks @ 4 Hz
+
         # Apply initial gutters around/within the grid
         self._apply_gutters()
+
+        # Start live mode automatically if requested
+        if self.live_enabled:
+            self._start_live_mode()
 
     def _simulate_feedback(self) -> Tuple[int, float, float]:
         # Real dt (ms) since last tick for dwell/conf ramps
@@ -434,18 +479,38 @@ class NeuroRelayWindow(QMainWindow):
             self.showFullScreen()
 
     def _on_tick(self) -> None:
-        # Update simulated feedback (Phase 1)
-        idx, conf, dwell = self._simulate_feedback()
+        now = time.monotonic()
 
-        # Push feedback & trigger repaint on each tile
-        for i, tile in enumerate(self.tiles):
-            tile.set_feedback(
-                conf if i == idx else max(0.0, conf - 0.3),
-                dwell if i == idx else 0.0,
-                i == idx,
-            )
-            if not self.is_paused:
-                tile.update()
+        if self.live_enabled and self._last_prediction_ts > 0.0:
+            # Update link lamp
+            self._update_link_lamp(now)
+
+            # Compute dwell progress continuously between prediction callbacks
+            dwell_prog = 0.0
+            if self._dwell_start_ts is not None and self.state == "evaluate" and not self.is_paused:
+                dwell_prog = min(1.0, max(0.0, (now - self._dwell_start_ts) / max(1e-3, self.cfg.dwell_sec)))
+
+            top_idx = self._current_top_idx if self._current_top_idx is not None else 0
+            # Push feedback & repaint
+            for i, tile in enumerate(self.tiles):
+                tile.set_feedback(
+                    self._display_conf[i],
+                    dwell_prog if (self._dwell_winner_idx == i) else 0.0,
+                    i == top_idx,
+                )
+                if not self.is_paused:
+                    tile.update()
+        else:
+            # Phase 1 simulator path
+            idx, conf, dwell = self._simulate_feedback()
+            for i, tile in enumerate(self.tiles):
+                tile.set_feedback(
+                    conf if i == idx else max(0.0, conf - 0.3),
+                    dwell if i == idx else 0.0,
+                    i == idx,
+                )
+                if not self.is_paused:
+                    tile.update()
 
     # --- Layout helpers ---
     def _apply_gutters(self) -> None:
@@ -471,6 +536,149 @@ class NeuroRelayWindow(QMainWindow):
         self._apply_gutters()
         return super().resizeEvent(e)
 
+    # --- Live mode (Phase 3) ---
+    def _start_live_mode(self) -> None:
+        """Instantiate and start the LivePredictor (lazy imports to keep Phase 1 clean)."""
+        # Load extended config keys from JSON (channels, bandpass, notch)
+        try:
+            raw_cfg = json.loads(self.config_path.read_text())
+        except Exception:
+            raw_cfg = {}
+        channels = raw_cfg.get("channels", None)
+        band = tuple(raw_cfg.get("bandpass_hz", [5, 40]))
+        notch = raw_cfg.get("notch_hz", None)
+
+        try:
+            from ..bridge.qt_live_bridge import LivePredictor
+            from ..stream.lsl_source import LSLConfig
+            from ..signal.ssvep_detector import SSVEPConfig
+        except Exception as e:
+            self._status(f"Live init error: {e}. Install extras with: uv sync -E ui -E stream")
+            return
+
+        lsl_cfg = LSLConfig(
+            stream_type=self.lsl_type,
+            stream_name=self.lsl_name,
+            timeout=self.lsl_timeout,
+            buffer_seconds=self.cfg.window_sec + 2.0,
+        )
+        ssvep_cfg = SSVEPConfig(
+            frequencies=self.cfg.freqs_hz,
+            sample_rate=250.0,  # updated from LSL on connect
+            window_seconds=self.cfg.window_sec,
+            channels=channels,
+            bandpass_freq=(float(band[0]), float(band[1])),
+            notch_freq=float(notch) if (notch is not None) else None,
+            harmonics=2,
+            method="cca",
+        )
+        self.live_predictor = LivePredictor(lsl_cfg, ssvep_cfg)
+        self.live_predictor.update_prediction_rate(self.prediction_rate_hz)
+        self.live_predictor.prediction.connect(self._on_live_prediction)  # type: ignore
+        self.live_predictor.status_changed.connect(self._status)  # type: ignore
+        self.live_predictor.data_received.connect(lambda n: None)  # type: ignore
+
+        if self.live_predictor.start():
+            self._status("Live SSVEP mode active")
+            self._on_start()  # enter evaluate state
+        else:
+            self._status("Failed to start live mode (LSL)")
+
+    def _status(self, msg: str) -> None:
+        try:
+            self.statusBar().showMessage(msg, 3000)
+        except Exception:
+            pass
+        self.link_label.setText(f"Live: {msg}")
+
+    def _update_link_lamp(self, now: float) -> None:
+        age = now - self._last_prediction_ts if self._last_prediction_ts > 0 else 1e9
+        if age < 0.5:
+            color = "#2ea043"   # green
+            txt = "connected"
+        elif age < 2.0:
+            color = "#d29922"   # yellow
+            txt = "delayed"
+        else:
+            color = "#a33"      # red
+            txt = "no data"
+        self.link_dot.setStyleSheet(f"background:{color}; border-radius:7px; border:1px solid #222;")
+        # Keep human-readable text short; status bar shows details
+        self.link_label.setText(f"Live: {txt}")
+
+    def _on_live_prediction(self, frequency: float, confidence: float, scores: dict) -> None:
+        """Handle live predictions: stability, dwell, commit."""
+        now = time.monotonic()
+        self._last_prediction_ts = now
+
+        # Map scores to tile order (nearest frequency matching for robustness)
+        tile_scores = []
+        freqs = list(scores.keys())
+        for f in self.cfg.freqs_hz:
+            j = int(np.argmin([abs(f - g) for g in freqs]))
+            tile_scores.append(float(scores[freqs[j]]))
+
+        # Normalize to confidences (softmax over z-scores)
+        vals = np.asarray(tile_scores, dtype=float)
+        if np.std(vals) > 1e-6:
+            z = (vals - np.mean(vals)) / max(1e-9, float(np.std(vals)))
+            ex = np.exp(z - np.max(z))
+            confs = ex / np.sum(ex)
+        else:
+            confs = np.ones_like(vals) / max(1, len(vals))
+
+        self._display_conf = [float(c) for c in confs.tolist()]
+        top_idx = int(np.argmax(confs))
+        top_conf = float(confs[top_idx])
+        second_conf = float(np.partition(confs, -2)[-2]) if len(confs) >= 2 else 0.0
+        self._current_top_idx = top_idx
+
+        # Stability (winner unchanged across last 3 predictions)
+        if self._stable_idx == top_idx:
+            self._stable_count += 1
+        else:
+            self._stable_idx = top_idx
+            self._stable_count = 1
+
+        stable_enough = self._stable_count >= 3  # ~0.75 s @ 4 Hz
+        clear_margin = (top_conf - second_conf) >= 0.05
+        threshold_ok = top_conf >= self.cfg.tau
+
+        can_dwell = stable_enough and clear_margin and threshold_ok
+
+        if self.state == "evaluate" and not self.is_paused and can_dwell:
+            if self._dwell_winner_idx != top_idx:
+                self._dwell_winner_idx = top_idx
+                self._dwell_start_ts = now
+            # Check commit (with cooldown to prevent immediate repeat commits)
+            if (self._dwell_start_ts is not None
+                and (now - self._dwell_start_ts) >= self.cfg.dwell_sec
+                and (now - self._last_commit_ts) >= self._commit_cooldown_sec):
+                self._commit_selection(top_idx, top_conf)
+        else:
+            # Reset dwell when evidence is insufficient or paused/idle
+            self._dwell_start_ts = None
+            self._dwell_winner_idx = None
+
+    def _commit_selection(self, idx: int, conf: float) -> None:
+        self._last_commit_ts = time.monotonic()
+        label = self.LABELS[idx]
+        self.agent_label.setText(f"agent: {label.lower()} • conf={conf:.2f} (Phase 3 commit)")
+        self._status(f"Committed: {label} (conf={conf:.2f})")
+        # Reset dwell for next selection
+        self._dwell_start_ts = None
+        self._dwell_winner_idx = None
+        # Optionally return to idle; keep evaluate for repeated selections
+        # self.state = "idle"
+
+    def closeEvent(self, e):
+        if self.live_predictor:
+            try:
+                self.live_predictor.stop()
+            except Exception:
+                pass
+        return super().closeEvent(e)
+
 
 def main(argv: List[str] | None = None) -> int:
     import argparse
@@ -480,6 +688,12 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--mode", choices=["sinusoidal", "square"], default="sinusoidal", help="Flicker mode")
     parser.add_argument("--auto-freqs", action="store_true", help="Use monitor_hz/[7,6,5,4] instead of config freqs")
     parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen")
+    # Phase 3 live flags
+    parser.add_argument("--live", action="store_true", help="Enable live LSL detection")
+    parser.add_argument("--lsl-type", default="EEG", help="LSL stream type (default: EEG)")
+    parser.add_argument("--lsl-name", default=None, help="LSL stream name (optional)")
+    parser.add_argument("--lsl-timeout", type=float, default=5.0, help="LSL discovery timeout (s)")
+    parser.add_argument("--prediction-rate", type=float, default=4.0, help="Live prediction rate (Hz)")
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -499,7 +713,15 @@ def main(argv: List[str] | None = None) -> int:
 
     app = QApplication([])
     apply_dark_theme(app)
-    win = NeuroRelayWindow(cfg, config_path=config_path)
+    win = NeuroRelayWindow(
+        cfg,
+        config_path=config_path,
+        live=args.live,
+        lsl_type=args.lsl_type,
+        lsl_name=args.lsl_name,
+        lsl_timeout=args.lsl_timeout,
+        prediction_rate_hz=args.prediction_rate,
+    )
     for t in win.tiles:
         t.mode = cfg.flicker_mode
     win.resize(1120, 760)

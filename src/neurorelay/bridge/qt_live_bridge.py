@@ -95,8 +95,9 @@ class LivePredictor(QObject):
             if data is None or data.shape[0] < min_needed:
                 return
             
-            # Detect SSVEP and emit results
-            best_freq, confidence, scores = self.detector.detect(data)
+            # Detect SSVEP with channel names from LSL metadata
+            ch_names = info.get('channel_names') if info else None
+            best_freq, confidence, scores = self.detector.detect(data, ch_names)
             
             # Emit prediction signal
             self.prediction.emit(best_freq, confidence, scores)

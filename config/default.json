@@ -1,5 +1,5 @@
 {
-  "monitor_hz": 60,
+  "monitor_hz": 120,
   "freqs_hz": [8.57, 10.0, 12.0, 15.0],
   "window_sec": 3.0,
   "step_sec": 0.5,

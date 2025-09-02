@@ -758,7 +758,16 @@ Perfect—your code looks great and the UI polish is in. Here’s a clean, copy-
 * **Robust numerics**: Safe filter bounds, regularized CCA, improved error handling
 * **Tested**: Synthetic signals correctly detected, all tests pass, 19/19 ✓
 
-## 🚧 Phase 3 Next: UI Integration + Live Demo
+## 🚧 Phase 3 Complete: UI Integration + Live Demo ✅
+* **Live SSVEP detection** fully integrated into 4-button UI
+* **Status lamp**: Green (connected), yellow (delayed), red (no data)
+* **Real-time confidence** updates from live EEG predictions
+* **Stability + dwell policy**: Winner stays stable for ≥3 predictions, conf ≥ τ=0.65, dwell fills over 1.2s
+* **Live commit**: Selection committed to Agent Dock with confidence score
+* **Dual mode**: `--live` for real EEG streams, Phase 1 simulator when not specified
+* **End-to-end**: User gazes at tile → real-time frequency detection → dwell confirmation → commit
+
+## 📋 Phase 4 Planned: Local Agent Integration
 * Wire `LivePredictor` into existing 4-button UI
 * Replace simulator confidence updates with real SSVEP predictions  
 * Add LSL connection status and stream info display
@@ -772,7 +781,76 @@ Perfect—your code looks great and the UI polish is in. Here’s a clean, copy-
 
 ---
 
-# NeuroRelay — Phase 2 (Live LSL Bridge + Online SSVEP Detector) ✅
+---
+
+# NeuroRelay — Phase 3 (UI Integration + Live Demo) ✅
+
+## Quick start (live SSVEP → UI)
+
+```bash
+# 0) Install UI + streaming extras
+uv sync -E ui -E stream
+
+# 1) Install liblsl (required for pylsl)
+# Option A: conda
+conda install -c conda-forge liblsl
+# Option B: download from releases and ensure pylsl can find it
+# https://github.com/sccn/liblsl/releases
+
+# 2) Start your EEG LSL stream (e.g., OpenBCI GUI, CURRY→MATLAB bridge)
+
+# 3) Launch the live UI
+uv run neurorelay-ui --live --auto-freqs --lsl-type EEG --prediction-rate 4
+```
+
+**What you'll see**
+
+* The same 2×2 **flicker tiles** (SUMMARIZE / TODOS / DEADLINES / EMAIL).
+* A **status dot** near the bottom: **green** = healthy, **yellow** = delayed, **red** = no data.
+* **Confidence underlines** update from *live* scores.
+* A **dwell ring** fills once the winner stays stable and above threshold; when full, a "selection committed" toast appears in the Agent Dock (Phase 4 will execute tools).
+
+### Controls
+
+* **H** — Toggle HUD (operator info & buttons)
+* **Space** — Pause/Resume feedback (dwell pauses)
+* **ESC** — Exit
+* **F11** — Fullscreen
+* **1/2/3/4** — (Dev) Simulate winner (unchanged from Phase 1)
+
+### Recommended settings
+
+* Match your display refresh with `--auto-freqs` **or** set `monitor_hz` in `config/default.json`.
+
+  * At \~**60 Hz** the app uses **8.57, 10, 12, 15 Hz**; at \~**50 Hz** it uses **8.33, 10, 12.5, 16.67 Hz**.
+* Keep flicker **below 20 Hz** for comfort; if your monitor is **120 Hz**, prefer `--auto-freqs` only if it yields acceptable freqs or set freqs manually in the config.
+
+### Live policy (P0 defaults)
+
+* **Threshold** `τ = 0.65` (softmax of z‑scored scores)
+* **Stability**: winner must remain top‑1 for **≥3 consecutive predictions** (with default prediction rate **4 Hz** ≈ 0.75 s)
+* **Dwell**: **1.2 s** of continuous stability + threshold to **commit**
+* **Tie guard**: if top‑1 – top‑2 < **0.05**, dwell doesn't accumulate ("need more evidence")
+
+### CLI (new Phase‑3 flags)
+
+```bash
+uv run neurorelay-ui --live \
+  --auto-freqs \
+  --lsl-type EEG \
+  --lsl-name "OpenBCI_EEG" \
+  --lsl-timeout 5.0 \
+  --prediction-rate 4.0 \
+  --fullscreen
+```
+
+**Notes**
+
+* If you see **"pylsl not available"**, run `uv sync -E stream` and install **liblsl**.
+* The UI will show **"Live SSVEP mode active"** in the status bar when connected.
+* The **Agent Dock** shows commits (file actions come in Phase 4).
+
+---
 
 ## Quick start
 
