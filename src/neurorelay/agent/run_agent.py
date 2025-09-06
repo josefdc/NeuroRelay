@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..agent.tools_local import AgentConfig, handle_selection
+from ..agent.tools_local import AgentConfig, handle_selection, LocalLLM
 
 
 def now_iso() -> str:
@@ -37,12 +37,14 @@ def main() -> int:
     cfg = load_config()
     log_path = Path("logs/agent.jsonl")
     # A small hello banner on stdout so parent knows we're alive (also JSON)
+    llm = LocalLLM(cfg.model_name, cfg.lm_url, cfg.llm_timeout)
     hello = {
         "type": "agent_hello",
         "ts": now_iso(),
         "agent": {"name": "gpt-oss-local", "version": "0.1.0"},
         "sandbox_root": str(cfg.sandbox_root),
         "out_dir": str(cfg.out_dir),
+        "lm_studio_mode": "available" if llm.available() else "unavailable",
     }
     print(json.dumps(hello, ensure_ascii=False), flush=True)
 

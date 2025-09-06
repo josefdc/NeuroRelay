@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
 
-from PySide6.QtCore import Qt, QElapsedTimer, QTimer, QRectF, QSize
+from PySide6.QtCore import Qt, QElapsedTimer, QTimer, QRectF, QSize, QThread, Signal, QObject
 from PySide6.QtGui import QColor, QPainter, QPen, QFont, QPaintEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,6 +29,10 @@ from PySide6.QtWidgets import (
 
 # NEW imports for Phase 4
 from ..bus.brainbus import AgentProcess
+try:
+    from ..agent.tools_local import LocalLLM  # reuse the same LM Studio wrapper if agent extra is installed
+except ImportError:
+    LocalLLM = None
 
 
 @dataclass
@@ -233,7 +239,7 @@ class FlickerTile(QWidget):
 
 
 class NeuroRelayWindow(QMainWindow):
-    LABELS = ("SUMMARIZE", "TODOS", "DEADLINES", "EMAIL")
+    LABELS = ("HELP", "READ", "PLAN", "MESSAGE")
 
     def _pick_active_document(self) -> Optional[Path]:
         try:
@@ -267,7 +273,7 @@ class NeuroRelayWindow(QMainWindow):
         prediction_rate_hz: float = 4.0,
     ) -> None:
         super().__init__()
-        title = "NeuroRelay — SSVEP 4-Option (Live)" if live else "NeuroRelay — SSVEP 4-Option (Phase 1)"
+        title = "NeuroRelay — SSVEP 4-Option (Live)" if live else "NeuroRelay — SSVEP 4-Option (Simulation)"
         self.setWindowTitle(title)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.cfg = cfg
@@ -357,7 +363,7 @@ class NeuroRelayWindow(QMainWindow):
         """)
         dock_layout = QHBoxLayout(self.agent_dock)
         dock_layout.setContentsMargins(10, 6, 10, 6)
-        self.agent_label = QLabel("agent: waiting… (placeholder)")
+        self.agent_label = QLabel("agent: waiting…")
         self.agent_label.setObjectName("agentText")
         dock_layout.addWidget(self.agent_label)
 
@@ -455,10 +461,8 @@ class NeuroRelayWindow(QMainWindow):
 
         # Active document (if any) to show in center panel subtitle
         self._active_doc: Optional[Path] = self._pick_active_document()
-        if self._active_doc:
-            self.center_panel.sub.setText(f"Active document: {self._active_doc.name}")
-        else:
-            self.center_panel.sub.setText("Place a file in workspace/in/")
+        # Placeholder until LLM generates text
+        self.center_panel.sub.setText("Generating on-screen guidance…")
 
         # Track last output path for Open button
         self._last_output_path: Optional[str] = None
@@ -471,6 +475,17 @@ class NeuroRelayWindow(QMainWindow):
 
         # Apply initial gutters around/within the grid
         self._apply_gutters()
+
+        # Full-screen overlay for HELP / MESSAGE
+        self._overlay = QFrame(self)
+        self._overlay.hide()
+        self._overlay.setStyleSheet("background: rgba(0,0,0,0.92);")
+        self._overlay_label = QLabel(self._overlay)
+        self._overlay_label.setStyleSheet("color: white; font-weight: 700;")
+        self._overlay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Generate the center prompt with gpt-oss (if LM Studio is present)
+        QTimer.singleShot(50, self._refresh_center_prompt_async)
 
         # Start live mode automatically if requested
         if self.live_enabled:
@@ -492,13 +507,14 @@ class NeuroRelayWindow(QMainWindow):
         from PySide6.QtCore import QEvent
         if event.type() == QEvent.Type.KeyPress:
             key = event.key()
-            if key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_1):
+            # Simulator shortcuts for the new labels
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_1):   # HELP
                 self._set_winner(0)
-            elif key in (Qt.Key.Key_Right, Qt.Key.Key_2):
+            elif key in (Qt.Key.Key_Right, Qt.Key.Key_2):               # READ
                 self._set_winner(1)
-            elif key in (Qt.Key.Key_Down, Qt.Key.Key_3):
+            elif key in (Qt.Key.Key_Down, Qt.Key.Key_3):                # PLAN
                 self._set_winner(2)
-            elif key in (Qt.Key.Key_4,):
+            elif key in (Qt.Key.Key_4,):                                # MESSAGE
                 self._set_winner(3)
             elif key == Qt.Key.Key_Space:
                 self._on_pause()
@@ -577,6 +593,15 @@ class NeuroRelayWindow(QMainWindow):
                 )
                 if not self.is_paused:
                     tile.update()
+
+        # Keep overlay label responsive
+        if self._overlay.isVisible():
+            f = self._overlay_label.font()
+            # scale font to window size
+            pt = max(22.0, min(96.0, self.height() * 0.08))
+            f.setPointSizeF(pt)
+            self._overlay_label.setFont(f)
+            self._overlay_label.resize(self._overlay.size())
 
     # --- Layout helpers ---
     def _apply_gutters(self) -> None:
@@ -737,16 +762,15 @@ class NeuroRelayWindow(QMainWindow):
         sandbox_root = Path(raw_cfg.get("sandbox_root", "workspace"))
         context: dict = {}
 
-        if label in ("SUMMARIZE", "TODOS", "DEADLINES"):
+        if label in ("READ", "PLAN"):
             # Ensure active doc (pick latest if needed)
             self._active_doc = self._pick_active_document()
             if self._active_doc and self._active_doc.exists():
                 context["file"] = str(self._active_doc)
             else:
                 self._status("No document in workspace/in/ — agent will warn")
-        else:
-            # EMAIL — lightweight default topic
-            context["topic"] = f"Follow-up on {self._active_doc.name if self._active_doc else 'the document'}"
+        elif label == "MESSAGE":
+            context["topic"] = f"Follow-up on {self._active_doc.name if self._active_doc else 'this'}"
 
         event = {
             "ts": "auto",
@@ -780,6 +804,11 @@ class NeuroRelayWindow(QMainWindow):
                 # Store last output path and show Open button
                 self._last_output_path = out_path
                 self.open_btn.setVisible(True)
+                # Show overlay text for HELP/MESSAGE if present
+                overlay = obj.get("overlay")
+                if overlay:
+                    self._show_overlay(overlay)
+                    QApplication.beep()
             else:
                 err = obj.get("error", "unknown")
                 self.agent_label.setText(f"agent: error — {err}")
@@ -864,11 +893,64 @@ class NeuroRelayWindow(QMainWindow):
                 pass
         return super().closeEvent(e)
 
+    # ---------------------------
+    # LLM-generated center prompt
+    # ---------------------------
+    def _refresh_center_prompt_async(self):
+        """Ask gpt-oss (via LM Studio) to author the center headline/subtitle."""
+        def run():
+            # Reuse LocalLLM wrapper; if unavailable, fall back to defaults
+            llm = None
+            if LocalLLM is not None:
+                try:
+                    llm = LocalLLM(
+                        model=os.environ.get("NEURORELAY_GPT_MODEL", "openai/gpt-oss-20b"),
+                        base_url=os.environ.get("NEURORELAY_LMSTUDIO_URL", "http://localhost:1234/v1"),
+                        timeout=float(os.environ.get("NEURORELAY_LLM_TIMEOUT", "15")),
+                    )
+                except Exception:
+                    llm = None
+            doc = self._active_doc.name if self._active_doc else "no document"
+            title, sub = "What do you need now?", f"Active document: {doc}"
+            if llm and llm.available():
+                try:
+                    resp = llm.chat(
+                        "You write brief, supportive UI prompts for an eye‑gaze user."
+                        " Keep language simple. Available actions are: HELP, READ, PLAN, MESSAGE.",
+                        f"It's {time.strftime('%A %H:%M')}. The active doc is '{doc}'. "
+                        "Write a 5–7 word headline and a 10–14 word subtitle separated by a newline."
+                    )
+                    parts = (resp or "").splitlines()
+                    if parts:
+                        title = parts[0].strip() or title
+                    if len(parts) > 1:
+                        sub = parts[1].strip() or sub
+                except Exception:
+                    pass
+            def apply():
+                self.center_panel.title.setText(title)
+                self.center_panel.sub.setText(sub)
+            QTimer.singleShot(0, apply)
+        import os, time, threading
+        threading.Thread(target=run, daemon=True).start()
+
+    # ---------------------------
+    # Overlay
+    # ---------------------------
+    def _show_overlay(self, text: str, timeout_sec: float = 12.0):
+        self._overlay.setGeometry(self.rect())
+        self._overlay_label.setText(text)
+        self._overlay_label.resize(self._overlay.size())
+        self._overlay.show()
+        self._overlay.raise_()
+        # auto-hide
+        QTimer.singleShot(int(timeout_sec * 1000), lambda: self._overlay.hide())
+
 
 def main(argv: List[str] | None = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="NeuroRelay SSVEP 2×2 UI (Phase 1)")
+    parser = argparse.ArgumentParser(description="NeuroRelay SSVEP 4-Option UI (Accessibility)")
     parser.add_argument("--config", default="config/default.json", help="Path to config JSON")
     parser.add_argument("--mode", choices=["sinusoidal", "square"], default="sinusoidal", help="Flicker mode")
     parser.add_argument("--auto-freqs", action="store_true", help="Use monitor_hz/[7,6,5,4] instead of config freqs")

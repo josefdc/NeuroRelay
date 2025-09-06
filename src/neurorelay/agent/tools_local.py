@@ -36,8 +36,17 @@ try:
 except Exception:
     OpenAI = None
 
+try:
+    import pyttsx3  # offline TTS
+except Exception:
+    pyttsx3 = None
 
-LABELS = ("SUMMARIZE", "TODOS", "DEADLINES", "EMAIL")
+
+# New, pragmatic 4-option set (keep legacy labels accepted too)
+LABELS = (
+    "HELP", "READ", "PLAN", "MESSAGE",
+    "SUMMARIZE", "TODOS", "DEADLINES", "EMAIL",
+)
 
 SAFE_EXTS = {".txt", ".md", ".pdf", ".docx"}
 
@@ -200,6 +209,12 @@ class LocalLLM:
             except Exception:
                 return ""
         return ""
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def _now_stamp() -> str:
+    return time.strftime("%Y%m%d-%H%M%S")
 
 # -----------------------------
 # Tools
@@ -391,6 +406,113 @@ def tool_email(cfg: AgentConfig, topic: str, attachments: Optional[List[Path]] =
     return out
 
 
+# -----------------------------
+# New pragmatic tools
+# -----------------------------
+def tool_help(cfg: AgentConfig) -> Tuple[Path, str]:
+    """Create a HELP card text and write a small log file."""
+    ensure_dirs(cfg)
+    ts = _now_stamp()
+    out = cfg.out_dir / f"HELP_{ts}.md"
+    # Try LLM for a friendly, accessible help message
+    llm = LocalLLM(cfg.model_name, cfg.lm_url, cfg.llm_timeout)
+    overlay = ""
+    if llm.available():
+        system = (
+            "You write very short, high-contrast on-screen help cards for a nearby caregiver. "
+            "The user can only use eye-gaze. Keep it calm, clear, large-font friendly."
+        )
+        user = "Write one line asking for immediate help, and a second line showing the current time."
+        try:
+            overlay = llm.chat(system, user).strip()
+        except Exception:
+            pass
+    if not overlay:
+        overlay = f"PLEASE HELP ME\n{time.strftime('%H:%M:%S')}"
+    out.write_text(overlay + "\n", encoding="utf-8")
+    return out, overlay
+
+def tool_read_aloud(cfg: AgentConfig, file: Path) -> Tuple[Path, str]:
+    """LLM speech summary + offline TTS (pyttsx3)."""
+    ensure_dirs(cfg)
+    text = read_text(file)
+    ts = _now_stamp()
+    out = cfg.out_dir / f"{file.stem}_read_{ts}.md"
+
+    # Ask LLM for a speech-friendly 150–200 word summary
+    llm = LocalLLM(cfg.model_name, cfg.lm_url, cfg.llm_timeout)
+    speech = ""
+    if llm.available() and text.strip():
+        try:
+            speech = llm.chat(
+                "You are an assistive reading aid. Create a 150–200 word speech-friendly summary. "
+                "Use short sentences and plain language.",
+                f"Document text:\n{text[:8000]}\n\nWrite the speech now:"
+            )
+        except Exception:
+            pass
+    if not speech:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        speech = " ".join(lines[:60])[:1200] or "(Nothing to read.)"
+    out.write_text(speech, encoding="utf-8")
+
+    # Offline TTS
+    if pyttsx3 is not None:
+        try:
+            engine = pyttsx3.init()
+            engine.say(speech)
+            engine.runAndWait()
+        except Exception:
+            pass
+    return out, "Speaking…"
+
+def tool_plan(cfg: AgentConfig, file: Path) -> Path:
+    """Step-by-step plan from the active doc (LLM-first; falls back to TODOs)."""
+    ensure_dirs(cfg)
+    text = read_text(file)
+    out = cfg.out_dir / f"{file.stem}_plan.md"
+    llm = LocalLLM(cfg.model_name, cfg.lm_url, cfg.llm_timeout)
+    plan = ""
+    if llm.available() and text.strip():
+        try:
+            plan = llm.chat(
+                "You create short practical action plans. Return 5–8 numbered steps,"
+                " each ≤18 words, and a 2‑sentence overview.",
+                f"Make a plan for this document:\n{text[:8000]}"
+            )
+        except Exception:
+            pass
+    if not plan:
+        # fallback: reuse TODO extraction
+        tmp = tool_todos(cfg, file)
+        plan = "# Plan (heuristic)\n\n" + tmp.read_text(encoding="utf-8")
+    out.write_text(plan, encoding="utf-8")
+    return out
+
+def tool_message(cfg: AgentConfig, topic: Optional[str], attachment: Optional[Path]) -> Tuple[Path, str]:
+    """Compose a short caregiver message and return overlay text."""
+    ensure_dirs(cfg)
+    ts = _now_stamp()
+    out = cfg.out_dir / f"draft_{ts}.md"
+    llm = LocalLLM(cfg.model_name, cfg.lm_url, cfg.llm_timeout)
+    att = attachment.name if (attachment and attachment.exists()) else None
+    body = ""
+    if llm.available():
+        try:
+            body = llm.chat(
+                "You are a concise caregiver-messaging assistant. Produce a short, friendly message with a clear ask.",
+                f"Topic: {topic or 'general update'}\nAttachment: {att or '(none)'}"
+            )
+        except Exception:
+            pass
+    if not body:
+        body = f"**Message:** Could you please help me with {topic or 'this'}?\n\nThank you."
+    out.write_text(body, encoding="utf-8")
+    # Overlay: large-print first line(s)
+    overlay = body.splitlines()[0][:120]
+    return out, overlay
+
+
 # Top-level dispatcher
 
 def handle_selection(
@@ -403,7 +525,7 @@ def handle_selection(
     if label not in LABELS:
         return {"status": "error", "error": f"unknown label: {label}"}
 
-    if label in ("SUMMARIZE", "TODOS", "DEADLINES"):
+    if label in ("READ", "PLAN", "SUMMARIZE", "TODOS", "DEADLINES"):
         if file is None or not file.exists():
             # Try to pick one
             file = pick_active_document(cfg)
@@ -411,7 +533,13 @@ def handle_selection(
                 return {"status": "error", "error": "no input document found in workspace/in/"}
         if not in_sandbox(cfg, file):
             return {"status": "error", "error": f"file {file} not in sandbox"}
-        if label == "SUMMARIZE":
+        if label == "READ":
+            out, note = tool_read_aloud(cfg, file)
+            return {"status": "ok", "tool": "read", "out": str(out), "overlay": ""}  # overlay not needed
+        elif label == "PLAN":
+            out = tool_plan(cfg, file)
+            return {"status": "ok", "tool": "plan", "out": str(out)}
+        elif label == "SUMMARIZE":
             out = tool_summarize(cfg, file)
         elif label == "TODOS":
             out = tool_todos(cfg, file)
@@ -419,8 +547,18 @@ def handle_selection(
             out = tool_deadlines(cfg, file)
         return {"status": "ok", "tool": label.lower(), "out": str(out)}
 
-    # EMAIL
-    t = topic or "Status update"
-    attachments = [file] if (file and file.exists()) else []
-    out = tool_email(cfg, t, attachments)
-    return {"status": "ok", "tool": "email", "out": str(out)}
+    if label == "HELP":
+        out, overlay = tool_help(cfg)
+        return {"status": "ok", "tool": "help", "out": str(out), "overlay": overlay}
+
+    # MESSAGE (LLM draft + large-print overlay) or legacy EMAIL
+    t = topic or (file.name if file else "an update")
+    if label == "EMAIL":
+        # Legacy support
+        attachments = [file] if (file and file.exists()) else []
+        out = tool_email(cfg, t, attachments)
+        return {"status": "ok", "tool": "email", "out": str(out)}
+    else:
+        # MESSAGE
+        out, overlay = tool_message(cfg, t, file if (file and file.exists()) else None)
+        return {"status": "ok", "tool": "message", "out": str(out), "overlay": overlay}
