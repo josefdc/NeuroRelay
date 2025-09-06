@@ -1,4 +1,3 @@
-Below is a **ready‑to‑drop‑in `README.md`** (user manual) for your repo. It’s written for a first‑time operator to get from zero to a working demo (simulation → live LSL → agent outputs), with clear steps, commands, controls, and troubleshooting.
 
 ---
 
