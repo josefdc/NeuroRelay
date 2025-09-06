@@ -1,22 +1,23 @@
 % ====== Config ======
-CURRY_HOST = '192.168.50.10';  % IP del PC con CURRY (Server)
-PORT       = 4000;             % Puerto NetStreaming (sin compresión)
-FS         = 1000;             % Hz (muestreo real del stream)
-NCH        = 32;               % # canales
-BLK_S      = 1.0;              % segundos por bloque (1.0 si Blocks/s = 1)
-STREAM_NAME = 'NeuroscanEEG';  % nombre LSL
-LITTLE_ENDIAN = true;          % Windows/x86: true
+CURRY_HOST   = '192.168.50.10';  % IP del PC con CURRY (Server)
+PORT         = 4000;             % Puerto NetStreaming (SIN compresión)
+FS           = 1000;             % Hz (muestreo real del stream)
+NCH          = 32;               % # canales
+BLK_S        = 1.0;              % segundos por bloque (1.0 si Blocks/s = 1)
+STREAM_NAME  = 'NeuroscanEEG';   % nombre LSL
+LITTLE_ENDIAN = true;            % Windows/x86: true
 
 SAMPLES   = round(FS * BLK_S);
-BYTES_BLK = SAMPLES * NCH * 4; % float32
+BYTES_BLK = SAMPLES * NCH * 4;   % float32
 
 % ====== Conexión TCP (cliente) ======
 t = tcpclient(CURRY_HOST, PORT, "Timeout", 5);
 fprintf('[TCP] Conectado a %s:%d\n', CURRY_HOST, PORT);
 
 % ====== LSL ======
-addpath('path/a/liblsl-Matlab');   % <--- ajusta ruta a liblsl
-lib  = lsl_loadlib();
+thisdir = fileparts(mfilename('fullpath'));       % carpeta donde está este .m
+addpath(fullfile(thisdir,'liblsl-Matlab'));       % liblsl-Matlab está al lado
+lib = lsl_loadlib();
 info = lsl_streaminfo(lib, STREAM_NAME, 'EEG', NCH, FS, 'cf_float32', 'neurorelay-bridge');
 outlet = lsl_outlet(info, 0, 360); % chunk=0 (variable), buffer=360 s
 
@@ -30,8 +31,9 @@ while true
         pause(0.003);
         continue;
     end
+
     while numel(buf) >= BYTES_BLK
-        raw = buf(1:BYTES_BLK); 
+        raw = buf(1:BYTES_BLK);
         buf = buf(BYTES_BLK+1:end);
 
         x = typecast(raw, 'single');     % float32
