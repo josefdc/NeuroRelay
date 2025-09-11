@@ -35,12 +35,6 @@ NeuroRelay bridges this gap with a reliable four‑choice control loop: **look a
 
 ---
 
-## 🎬 Demo Video (≤3 min)
-
-> 🎥 **Coming soon:** `https://youtu.be/REPLACE_ME`
-
----
-
 ## ⚡ Quick Start
 
 ```bash
