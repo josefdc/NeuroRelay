@@ -360,6 +360,13 @@ uv run neurorelay-gen-synth --out data/sim_session.csv --monitor-hz 120 --freqs 
 
 ---
 
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+  <img src="assets/demodani.jpeg" alt="NeuroRelay Demo" width="480" />
+  
+</p>
+<!-- markdownlint-enable MD033 -->
+
 ## Team
 
 Meet the people behind NeuroRelay. Click a photo or name to open LinkedIn.
