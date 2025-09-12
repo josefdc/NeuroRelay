@@ -359,3 +359,50 @@ uv run neurorelay-gen-synth --out data/sim_session.csv --monitor-hz 120 --freqs 
 6. (If live) Enable `--live`, confirm the link dot turns **green**, then fixate a tile until the dwell ring completes to commit.
 
 ---
+
+## Team
+
+Meet the people behind NeuroRelay. Click a photo or name to open LinkedIn.
+
+<!-- markdownlint-disable MD033 -->
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://www.linkedin.com/in/josejaramillov/">
+        <img src="assets/josejaramillo.jpeg" alt="Jose Alfredo Jaramillo" width="180" />
+      </a>
+      <br/>
+      <a href="https://www.linkedin.com/in/josejaramillov/"><strong>Jose Alfredo Jaramillo</strong></a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://www.linkedin.com/in/rosario-iodice-49633880/">
+        <img src="assets/rosario.jpeg" alt="Rosario Iodice" width="180" />
+      </a>
+      <br/>
+      <a href="https://www.linkedin.com/in/rosario-iodice-49633880/"><strong>Rosario Iodice</strong></a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://www.linkedin.com/in/jose-felipe-duarte">
+        <img src="assets/joseduarte.jpeg" alt="Jose Felipe Duarte" width="180" />
+      </a>
+      <br/>
+      <a href="https://www.linkedin.com/in/jose-felipe-duarte"><strong>Jose Felipe Duarte</strong></a>
+    </td>
+  </tr>
+</table>
+
+</div>
+<!-- markdownlint-enable MD033 -->
+
+### Partner Universities
+
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+  <img src="assets/Logo-UTP-Azul.png" alt="UTP Logo" height="64" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/UCPlogo.png" alt="UCP Logo" height="64" />
+</p>
+<!-- markdownlint-enable MD033 -->
+
