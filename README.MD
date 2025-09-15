@@ -40,7 +40,7 @@ NeuroRelay bridges this gap with a reliable four‑choice control loop: **look a
 ```bash
 # 1️⃣ Install dependencies
 uv venv
-uv sync -E ui -E stream -E agent
+uv sync --extra ui --extra stream --extra agent
 
 # 2️⃣ Add a test document
 mkdir -p workspace/in
@@ -67,7 +67,7 @@ uv run neurorelay-ui --fullscreen
 ### Installation
 ```bash
 uv venv
-uv sync -E ui -E stream -E agent
+uv sync --extra ui --extra stream --extra agent
 ```
 
 ### Optional: Local LLM Setup
@@ -307,7 +307,7 @@ uv run neurorelay-gen-synth \
 
 **“Failed to start neurorelay-agent”.**
 
-* Make sure `uv sync -E agent` was run (for PDF/DOCX & LLM client libs).
+* Make sure `uv sync --extra agent` was run (for PDF/DOCX & LLM client libs).
 * Check `logs/agent.jsonl` and console output.
 
 **“Open” button doesn’t open the file.**
@@ -329,7 +329,7 @@ uv run neurorelay-gen-synth \
 ```bash
 # Install
 uv venv
-uv sync -E ui -E stream -E agent
+uv sync --extra ui --extra stream --extra agent
 
 # UI: simulation (no EEG)
 uv run neurorelay-ui
